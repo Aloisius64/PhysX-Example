@@ -10,6 +10,11 @@
 #include <foundation\PxMat33.h> 
 #include <extensions\PxSimpleFactory.h>
 
+#include <characterkinematic\PxController.h>
+#include <characterkinematic\PxControllerManager.h>
+
+#include <vector>
+
 using namespace std;
 using namespace physx;
 
@@ -18,15 +23,16 @@ using namespace physx;
 #pragma comment(lib, "PxTask.lib")
 #pragma comment(lib, "PhysX3CommonDEBUG_x86.lib")
 #pragma comment(lib, "PhysX3ExtensionsDEBUG.lib")
+#pragma comment(lib, "PhysX3CharacterKinematicDEBUG_x86")
 #else
 #pragma comment(lib, "PhysX3_x86.lib")
 #pragma comment(lib, "PxTask.lib")
 #pragma comment(lib, "PhysX3Common_x86.lib")
 #pragma comment(lib, "PhysX3Extensions.lib")
+#pragma comment(lib, "PhysX3CharacterKinematic_x86")
 #endif
 
-const int	WINDOW_WIDTH = 1024,
-WINDOW_HEIGHT = 768;
+const int WINDOW_WIDTH = 1024, WINDOW_HEIGHT = 768;
 
 static PxPhysics* gPhysicsSDK = NULL;
 static PxDefaultErrorCallback gDefaultErrorCallback;
@@ -34,9 +40,18 @@ static PxDefaultAllocator gDefaultAllocatorCallback;
 static PxSimulationFilterShader gDefaultFilterShader = PxDefaultSimulationFilterShader;
 static PxFoundation* gFoundation = NULL;
 
+// Code for character controller
+static PxControllerManager* manager = NULL;
+PxController* characterController = NULL;
+bool xTrue = false, yTrue = false, zTrue = false;
+PxReal x = 0, z = 0, y = 0;
+PxReal movement = 0.2f;
+static PxF32 startElapsedTime;
+
 PxScene* gScene = NULL;
 PxReal myTimestep = 1.0f/60.0f;
-PxRigidActor *box;
+
+vector<PxRigidActor*> boxes;
 
 //for mouse dragging
 int oldX = 0, oldY = 0;
@@ -45,7 +60,7 @@ float fps = 0;
 int startTime = 0;
 int totalFrames = 0;
 int state = 1;
-float dist = -5;
+float dist = -10;
 
 void SetOrthoForFont() {
 	glMatrixMode(GL_PROJECTION);
@@ -138,6 +153,17 @@ void StepPhysX() {
 	while(!gScene->fetchResults()) {
 		// do something useful        
 	}
+
+	if(characterController) {
+		if(yTrue) {
+			y += gScene->getGravity().y/60.0f;
+			yTrue = false;
+		} else {
+			y = gScene->getGravity().y/60.0f;
+		}
+		PxControllerCollisionFlags collisionFlags =
+			characterController->move(PxVec3(x, y, z), 0.0f, GetCurrentTime()-startElapsedTime, NULL);
+	}
 }
 
 void InitializePhysX() {
@@ -164,7 +190,6 @@ void InitializePhysX() {
 
 	//PxExtensionVisualDebugger::connect(gPhysicsSDK->getPvdConnectionManager(),"localhost",5425, 10000, true);
 
-
 	//Create the scene
 	PxSceneDesc sceneDesc(gPhysicsSDK->getTolerancesScale());
 	sceneDesc.gravity = PxVec3(0.0f, -9.8f, 0.0f);
@@ -186,8 +211,7 @@ void InitializePhysX() {
 	gScene->setVisualizationParameter(PxVisualizationParameter::eSCALE, 1.0);
 	gScene->setVisualizationParameter(PxVisualizationParameter::eCOLLISION_SHAPES, 1.0f);
 
-
-	PxMaterial* mMaterial = gPhysicsSDK->createMaterial(0.5, 0.5, 0.5);
+	PxMaterial* mMaterial = gPhysicsSDK->createMaterial(0.1, 0.2, 0.5);
 
 	//Create actors 
 	//1) Create ground plane
@@ -203,7 +227,6 @@ void InitializePhysX() {
 		cerr<<"create shape failed!"<<endl;
 	gScene->addActor(*plane);
 
-
 	//2) Create cube	 
 	PxReal density = 1.0f;
 	PxTransform transform(PxVec3(0.0f, 10.0f, 0.0f), PxQuat::createIdentity());
@@ -216,8 +239,67 @@ void InitializePhysX() {
 	if(!actor)
 		cerr<<"create actor failed!"<<endl;
 	gScene->addActor(*actor);
+	boxes.push_back(actor);
 
-	box = actor;
+	//3) Create another cube	 
+	density = 1.0f;
+	PxTransform transform2(PxVec3(8.0f, 10.0f, 0.0f), PxQuat::createIdentity());
+	actor = PxCreateDynamic(*gPhysicsSDK, transform2, geometry, *mMaterial, density);
+	actor->setAngularDamping(0.75);
+	actor->setLinearVelocity(PxVec3(0, 0, 0));
+	if(!actor)
+		cerr<<"create actor failed!"<<endl;
+	gScene->addActor(*actor);
+	boxes.push_back(actor);
+
+	//4) Create another cube	 
+	density = 1.0f;
+	PxTransform transform3(PxVec3(-8.0f, 10.0f, 0.0f), PxQuat::createIdentity());
+	actor = PxCreateDynamic(*gPhysicsSDK, transform3, geometry, *mMaterial, density);
+	actor->setAngularDamping(0.75);
+	actor->setLinearVelocity(PxVec3(0, 0, 0));
+	if(!actor)
+		cerr<<"create actor failed!"<<endl;
+	gScene->addActor(*actor);
+	boxes.push_back(actor);
+
+	//5) Create another cube	 
+	density = 1.0f;
+	PxTransform transform4(PxVec3(-8.0f, 5.0f, 5.0f), PxQuat::createIdentity());
+	actor = PxCreateDynamic(*gPhysicsSDK, transform4, geometry, *mMaterial, density);
+	actor->setAngularDamping(0.75);
+	actor->setLinearVelocity(PxVec3(0, 0, 0));
+	if(!actor)
+		cerr<<"create actor failed!"<<endl;
+	gScene->addActor(*actor);
+	boxes.push_back(actor);
+
+	// Code for character controller
+	manager = PxCreateControllerManager(*gScene);
+	if(!manager) {
+		cerr<<"Unable to create character controller manager!"<<endl;
+	}
+
+	PxMaterial* capsuleMaterial = gPhysicsSDK->createMaterial(0.4f, 0.2f, 0.1f);
+	PxCapsuleControllerDesc capsuleDesc;
+	capsuleDesc.position = PxExtendedVec3(0.0f, 8.0f, 0.0f);
+	capsuleDesc.contactOffset = 0.05f;
+	capsuleDesc.stepOffset = 0.01f;
+	capsuleDesc.slopeLimit = 0.5f;
+	capsuleDesc.radius = 0.5f;
+	capsuleDesc.height = 0.5f;
+	capsuleDesc.upDirection = PxVec3(0, 1, 0);
+	capsuleDesc.material = capsuleMaterial;
+
+	characterController = manager->createController(capsuleDesc);
+	if(characterController) {
+		PxRigidDynamic* actor = characterController->getActor();
+		actor->setMass(PxReal(10.0f));
+		// Do something
+	} else
+		cerr<<"Unable to create character controller"<<endl;
+
+	startElapsedTime = PxF32(GetCurrentTime());
 }
 
 void getColumnMajor(PxMat33 m, PxVec3 t, float* mat) {
@@ -242,8 +324,8 @@ void getColumnMajor(PxMat33 m, PxVec3 t, float* mat) {
 	mat[15] = 1;
 }
 
-void DrawBox(PxShape* pShape) {
-	PxTransform pT = PxShapeExt::getGlobalPose(*pShape, *box);
+void DrawBox(PxShape* pShape, PxRigidActor* actor) {
+	PxTransform pT = PxShapeExt::getGlobalPose(*pShape, *actor);
 	PxBoxGeometry bg;
 	pShape->getBoxGeometry(bg);
 	PxMat33 m = PxMat33(pT.q);
@@ -255,11 +337,11 @@ void DrawBox(PxShape* pShape) {
 	glPopMatrix();
 }
 
-void DrawShape(PxShape* shape) {
+void DrawShape(PxShape* shape, PxRigidActor* actor) {
 	PxGeometryType::Enum type = shape->getGeometryType();
 	switch(type) {
 	case PxGeometryType::eBOX:
-		DrawBox(shape);
+		DrawBox(shape, actor);
 		break;
 	}
 }
@@ -270,20 +352,44 @@ void DrawActor(PxRigidActor* actor) {
 
 	actor->getShapes(shapes, nShapes);
 	while(nShapes--) {
-		DrawShape(shapes[nShapes]);
+		DrawShape(shapes[nShapes], actor);
 	}
 	delete[] shapes;
 }
 
 void RenderActors() {
+	GLfloat mat_diffuse[4] = {0.85f, 0, 0, 0};
+	glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, mat_diffuse);
 	// Render all the actors in the scene 
-	DrawActor(box);
+	for(int i = 0; i<boxes.size(); i++) {
+		DrawActor(boxes[i]);
+	}
+
+	// Draw character
+	if(characterController) {
+		glPushMatrix();
+		GLfloat mat_diffuse2[4] = {0.0f, 1.0f, 0, 0};
+		glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, mat_diffuse2);
+
+		const PxExtendedVec3 position = characterController->getPosition();
+		glTranslatef(
+			characterController->getPosition().x,
+			characterController->getPosition().y,
+			characterController->getPosition().z);
+		glutSolidCube(1.0f);
+		glPopMatrix();
+	}
 }
 
 void ShutdownPhysX() {
-	gScene->removeActor(*box);
+	for(int i = 0; i<boxes.size(); i++) {
+		gScene->removeActor(*boxes[i]);
+	}
 	gScene->release();
-	box->release();
+	for(vector<PxRigidActor*>::iterator i = boxes.begin(); i<boxes.end(); i++) {
+		(*i)->release();
+	}
+	manager->purgeControllers();
 	gPhysicsSDK->release();
 }
 
@@ -359,6 +465,47 @@ void OnShutdown() {
 	ShutdownPhysX();
 }
 
+void OnSpecialKeyboard(int key, int mx, int my) {
+	if(key==GLUT_KEY_UP) {
+		z = -movement;
+	}
+	if(key==GLUT_KEY_DOWN) {
+		z = movement;
+	}
+	if(key==GLUT_KEY_RIGHT) {
+		x = movement;
+	}
+	if(key==GLUT_KEY_LEFT) {
+		x = -movement;
+	}
+}
+
+void OnSpecialKeyboardUp(int key, int mx, int my) {
+	if(key==GLUT_KEY_UP) {
+		z = 0.0f;
+	}
+	if(key==GLUT_KEY_DOWN) {
+		z = 0.0f;
+	}
+	if(key==GLUT_KEY_RIGHT) {
+		x = 0.0f;
+	}
+	if(key==GLUT_KEY_LEFT) {
+		x = 0.0f;
+	}
+}
+
+void OnKeyboard(unsigned char key, int mx, int my) {
+	if(key=='j'||key=='J') {
+		yTrue = true;
+		y += movement*10;
+	}
+}
+
+void OnKeyboardUp(unsigned char key, int mx, int my) {
+
+}
+
 void Mouse(int button, int s, int x, int y) {
 	if(s==GLUT_DOWN) {
 		oldX = x;
@@ -398,9 +545,14 @@ void main(int argc, char** argv) {
 	glutDisplayFunc(OnRender);
 	glutIdleFunc(OnIdle);
 	glutReshapeFunc(OnReshape);
+	glutSpecialFunc(OnSpecialKeyboard);
+	glutSpecialUpFunc(OnSpecialKeyboardUp);
+	glutKeyboardFunc(OnKeyboard);
+	glutKeyboardUpFunc(OnKeyboardUp);
 
 	glutMouseFunc(Mouse);
 	glutMotionFunc(Motion);
+
 	InitGL();
 	InitializePhysX();
 
